@@ -27,11 +27,6 @@
 #include "libmpeg2.h"
 #include "../../../DSUtil/vd.h"
 
-#ifdef _WIN64
-#pragma warning(push)
-#pragma warning(disable:4244)
-#endif
-
 // decode
 
 #define SEQ_EXT 2
@@ -491,77 +486,34 @@ int CMpeg2Dec::skip_chunk(int bytes)
     return len;
 }
 
-int CMpeg2Dec::copy_chunk(int bytes)
+__declspec(nothrow noalias) size_t __fastcall CMpeg2Dec::copy_chunk(size_t bytes)
 {
-    if(!bytes)
-        return 0;
-
-    int len = 0;
-
-    // this assembly gives us a nice speed up
-    // 36 sec down to 32 sec decoding the ts.stream.tpr test file
-    // (idtc, mc was set to null)
-#ifndef _WIN64
-    __asm
-    {
-        mov ebx, this
-        mov esi, [ebx].m_buf_start
-        mov edi, [ebx].m_chunk_ptr
-        mov ecx, bytes
-        mov edx, [ebx].m_shift
-
-    copy_chunk_loop:
-
-        cmp edx, 0x00000100
-        jne copy_chunk_continue
-        mov edx, 0xffffff00
-
-        inc edi
-        mov [ebx].m_chunk_ptr, edi
-
-        inc esi
-        mov eax, esi
-        sub eax, [ebx].m_buf_start
-        mov len, eax
-
-        jmp copy_chunk_end
-
-    copy_chunk_continue:
-
-        movzx eax, byte ptr [esi]
-        or edx, eax
-        shl edx, 8
-        mov byte ptr [edi], al
-        inc esi
-        inc edi
-        dec ecx
-        jnz copy_chunk_loop
-
-    copy_chunk_end:
-
-        mov [ebx].m_buf_start, esi
-        mov [ebx].m_shift, edx
+    if (!bytes) {
+        goto copy_chunk_exitonzeroinput;
     }
-#else
+
     uint8_t* chunk_ptr = m_chunk_ptr;
     uint8_t* current = m_buf_start;
-    uint8_t* limit = current + bytes;
-
-    while(current < limit)
-    {
-        if(m_shift == 0x00000100)
-        {
-            m_shift = 0xffffff00;
-            len = ++current - m_buf_start;
-            m_chunk_ptr = ++chunk_ptr;
-            break;
+    uint32_t shift = m_shift;
+    do {
+        if (shift == 0x00000100) {
+            goto copy_chunk_processed;
         }
+        shift |= (*chunk_ptr++ = *current++);
+        shift <<= 8;
+    } while (--bytes);
 
-        m_shift = (m_shift | (*chunk_ptr++ = *current++)) << 8;
-    }
-
+    m_shift = shift;
     m_buf_start = current;
-#endif
+
+copy_chunk_exitonzeroinput:
+    return 0;
+
+copy_chunk_processed:
+    m_shift = 0xffffff00;
+    size_t len = ++current - m_buf_start;
+    m_chunk_ptr = ++chunk_ptr;
+    m_buf_start = current;
     return len;
 }
 
@@ -3738,6 +3690,3 @@ void CMpeg2Info::Reset()
     m_user_data_len = 0;
 }
 
-#ifdef _WIN64
-#pragma warning(pop)
-#endif

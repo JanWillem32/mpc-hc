@@ -307,7 +307,7 @@ public:
 class CMpeg2Dec
 {
     int skip_chunk(int bytes);
-    int copy_chunk(int bytes);
+    __declspec(nothrow noalias) size_t __fastcall copy_chunk(size_t bytes);
     mpeg2_state_t seek_chunk(), seek_header(), seek_sequence();
 
     int sequence_ext();
