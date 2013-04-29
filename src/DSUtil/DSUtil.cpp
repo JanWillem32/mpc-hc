@@ -785,7 +785,7 @@ CString BinToCString(const BYTE* ptr, size_t len)
     return ret;
 }
 
-static void FindFiles(CString fn, CAtlList<CString>& files)
+static void FindFiles(CString const& fn, CAtlList<CString>& files)
 {
     CString path = fn;
     path.Replace('/', '\\');
@@ -802,46 +802,47 @@ static void FindFiles(CString fn, CAtlList<CString>& files)
     }
 }
 
-cdrom_t GetCDROMType(TCHAR drive, CAtlList<CString>& files)
-{
+cdrom_t GetCDROMType(CString const& path, CAtlList<CString>& files)
+{// warning: the path needs to include _T('\\') at the end
     files.RemoveAll();
 
-    CString path;
-    path.Format(_T("%c:"), drive);
-
-    if (GetDriveType(path + _T("\\")) == DRIVE_CDROM) {
+    if (GetDriveType(path) == DRIVE_CDROM) {
         // CDROM_VideoCD
-        FindFiles(path + _T("\\mpegav\\avseq??.dat"), files);
-        FindFiles(path + _T("\\mpegav\\avseq??.mpg"), files);
-        FindFiles(path + _T("\\mpeg2\\avseq??.dat"), files);
-        FindFiles(path + _T("\\mpeg2\\avseq??.mpg"), files);
-        FindFiles(path + _T("\\mpegav\\music??.dat"), files);
-        FindFiles(path + _T("\\mpegav\\music??.mpg"), files);
-        FindFiles(path + _T("\\mpeg2\\music??.dat"), files);
-        FindFiles(path + _T("\\mpeg2\\music??.mpg"), files);
+        FindFiles(path + _T("mpegav\\avseq??.dat"), files);
+        FindFiles(path + _T("mpegav\\avseq??.mpg"), files);
+        FindFiles(path + _T("mpeg2\\avseq??.dat"), files);
+        FindFiles(path + _T("mpeg2\\avseq??.mpg"), files);
+        FindFiles(path + _T("avseq??.dat"), files);
+        FindFiles(path + _T("avseq??.mpg"), files);
+        FindFiles(path + _T("mpegav\\music??.dat"), files);
+        FindFiles(path + _T("mpegav\\music??.mpg"), files);
+        FindFiles(path + _T("mpeg2\\music??.dat"), files);
+        FindFiles(path + _T("mpeg2\\music??.mpg"), files);
+        FindFiles(path + _T("music??.dat"), files);
+        FindFiles(path + _T("music??.mpg"), files);
         if (!files.IsEmpty()) {
             return CDROM_VideoCD;
         }
 
         // CDROM_DVDVideo
-        FindFiles(path + _T("\\VIDEO_TS\\video_ts.ifo"), files);
+        FindFiles(path + _T("VIDEO_TS\\video_ts.ifo"), files);
+        FindFiles(path + _T("video_ts.ifo"), files);
         if (!files.IsEmpty()) {
             return CDROM_DVDVideo;
         }
 
         // CDROM_Audio
-        HANDLE hDrive = CreateFile(CString(_T("\\\\.\\")) + path, GENERIC_READ, FILE_SHARE_READ, nullptr,
-                                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, (HANDLE)nullptr);
+        HANDLE hDrive = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
         if (hDrive != INVALID_HANDLE_VALUE) {
             DWORD BytesReturned;
             CDROM_TOC TOC;
             if (DeviceIoControl(hDrive, IOCTL_CDROM_READ_TOC, nullptr, 0, &TOC, sizeof(TOC), &BytesReturned, 0)) {
-                for (ptrdiff_t i = TOC.FirstTrack; i <= TOC.LastTrack; i++) {
+                for (UCHAR i = TOC.FirstTrack; i <= TOC.LastTrack; ++i) {
                     // MMC-3 Draft Revision 10g: Table 222 - Q Sub-channel control field
                     TOC.TrackData[i - 1].Control &= 5;
                     if (TOC.TrackData[i - 1].Control == 0 || TOC.TrackData[i - 1].Control == 1) {
                         CString fn;
-                        fn.Format(_T("%s\\track%02d.cda"), path, i);
+                        fn.Format(_T("%s\\track%02hu.cda"), path, static_cast<unsigned short>(i));
                         files.AddTail(fn);
                     }
                 }
@@ -860,20 +861,15 @@ cdrom_t GetCDROMType(TCHAR drive, CAtlList<CString>& files)
     return CDROM_NotFound;
 }
 
-CString GetDriveLabel(TCHAR drive)
-{
+CString GetDriveLabel(CString const& path)
+{// warning: the path needs to include _T('\\') at the end
     CString label;
-
-    CString path;
-    path.Format(_T("%c:\\"), drive);
-    TCHAR VolumeNameBuffer[MAX_PATH], FileSystemNameBuffer[MAX_PATH];
-    DWORD VolumeSerialNumber, MaximumComponentLength, FileSystemFlags;
-    if (GetVolumeInformation(path,
-                             VolumeNameBuffer, MAX_PATH, &VolumeSerialNumber, &MaximumComponentLength,
-                             &FileSystemFlags, FileSystemNameBuffer, MAX_PATH)) {
-        label = VolumeNameBuffer;
+    LPTSTR szLabel = label.GetBufferSetLength(MAX_PATH);// the location MAX_PATH + 1 is guaranteed a trailing zero
+    if (GetVolumeInformation(path, szLabel, MAX_PATH + 1, nullptr, nullptr, nullptr, nullptr, 0)) {
+        label.ReleaseBuffer();
+    } else {
+        label.Empty();
     }
-
     return label;
 }
 
@@ -1415,27 +1411,42 @@ void UnloadExternalObjects()
     s_extobjs.RemoveAll();
 }
 
-CString MakeFullPath(LPCTSTR path)
+CString MakeFullPath(CString const& path)
 {
-    CString full(path);
-    full.Replace('/', '\\');
+    CPath c(path);
+    // only PathAllocCanonicalize() can properly canonicalize names over the MAX_PATH length, and it's only available on Windows 8 and newer
+    // this issue can only be solved by writing our own canonicalization routine for this, but for now we just don't process names prefixed with two backslashes at all
+    if (path[0] != _T('\\') || path[1] != _T('\\')) {
+        c.m_strPath.Replace(_T('/'), _T('\\'));
 
-    CString fn;
-    fn.ReleaseBuffer(GetModuleFileName(AfxGetInstanceHandle(), fn.GetBuffer(MAX_PATH), MAX_PATH));
-    CPath p(fn);
-
-    if (full.GetLength() >= 2 && full[0] == '\\' && full[1] != '\\') {
-        p.StripToRoot();
-        full = CString(p) + full.Mid(1);
-    } else if (full.Find(_T(":\\")) < 0) {
-        p.RemoveFileSpec();
-        p.AddBackslash();
-        full = CString(p) + full;
+        // this function can handle paths over the MAX_PATH limitation
+        CString p;
+        LPTSTR szPath = p.GetBufferSetLength(32767);
+        if (szPath) {
+            DWORD dwLength = ::GetModuleFileName(nullptr, szPath, 32767);
+            if (dwLength) {
+                p.Truncate(dwLength);
+                if (c.m_strPath.GetLength() >= 2 && c.m_strPath[0] == _T('\\')) {
+                    int root = p.Find(_T(":\\"));
+                    if (root > 0) {
+                        p.Truncate(root + 1);// truncate string right after the _T(':')
+                        c.m_strPath = p + c.m_strPath;
+                    }
+                } else if (c.m_strPath.Find(_T(":\\")) < 0) {
+                    DWORD i = dwLength - 6;// the last five characters (_T("x.exe")) are skipped in this loop
+                    while (szPath[i] != _T('\\')) {
+                        --i;
+                    }
+                    p.Truncate(i + 1);// truncate string right after the _T('\\')
+                    c.m_strPath = p + c.m_strPath;
+                }
+            }
+        }
+        if (c.m_strPath.GetLength() <= MAX_PATH) {
+            c.Canonicalize();// warning: can only handle up to the MAX_PATH limit, anything bigger will fail
+        }
     }
-
-    CPath c(full);
-    c.Canonicalize();
-    return CString(c);
+    return c.m_strPath;
 }
 
 //

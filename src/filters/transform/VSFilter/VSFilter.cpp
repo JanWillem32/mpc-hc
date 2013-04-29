@@ -69,8 +69,18 @@ int CVSFilterApp::ExitInstance()
 
 HINSTANCE CVSFilterApp::LoadAppLangResourceDLL()
 {
+    // this function can handle paths over the MAX_PATH limitation
     CString fn;
-    fn.ReleaseBufferSetLength(::GetModuleFileName(m_hInstance, fn.GetBuffer(MAX_PATH), MAX_PATH));
+    LPTSTR szPath = fn.GetBufferSetLength(32767);
+    if (!szPath) {
+        return nullptr;
+    }
+    DWORD dwLength = ::GetModuleFileName(m_hInstance, szPath, 32767);
+    if (!dwLength) {
+        return nullptr;
+    }
+    fn.Truncate(dwLength);
+
     fn = fn.Mid(fn.ReverseFind('\\') + 1);
     fn = fn.Left(fn.ReverseFind('.') + 1);
     fn = fn + _T("lang");

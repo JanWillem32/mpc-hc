@@ -275,15 +275,25 @@ bool FileExists(LPCTSTR fileName)
 }
 
 CString GetProgramPath(bool bWithExecutableName /*= false*/)
-{
+{// this function can handle paths over the MAX_PATH limitation
     CString path;
-
-    DWORD dwLength = ::GetModuleFileName(nullptr, path.GetBuffer(MAX_PATH), MAX_PATH);
-    path.ReleaseBuffer((int)dwLength);
-
-    if (!bWithExecutableName) {
-        path = path.Left(path.ReverseFind(_T('\\')) + 1);
+    LPTSTR szPath = path.GetBufferSetLength(32767);
+    if (!szPath) {
+        goto exit;
     }
-
+    DWORD dwLength = ::GetModuleFileName(nullptr, szPath, 32767);
+    if (!dwLength) {
+        path.Empty();
+        goto exit;
+    }
+    path.Truncate(dwLength);
+    if (dwLength && !bWithExecutableName) {
+        DWORD i = dwLength - 6;// the last five characters (_T("x.exe")) are skipped in this loop
+        while (szPath[i] != _T('\\')) {
+            --i;
+        }
+        path.Truncate(i + 1);// truncate string right after the _T('\\')
+    }
+exit:
     return path;
 }

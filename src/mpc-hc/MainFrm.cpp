@@ -4219,15 +4219,26 @@ BOOL CMainFrame::OnCopyData(CWnd* pWnd, COPYDATASTRUCT* pCDS)
         CAtlList<CString> sl;
 
         if (!s.slFiles.IsEmpty()) {
-            GetCDROMType(s.slFiles.GetHead()[0], sl);
+            CString p = s.slFiles.GetHead();
+            LPCTSTR szPath = p;
+            DWORD i = p.GetLength() - 1;
+            while (szPath[i] != _T('\\')) {
+                --i;
+            }
+            p.Truncate(i + 1);// truncate string right after the _T('\\')
+            GetCDROMType(p, sl);
         } else {
-            CString dir;
-            dir.ReleaseBufferSetLength(GetCurrentDirectory(MAX_PATH, dir.GetBuffer(MAX_PATH)));
+            // handle current working directory first
+            CString dir = GetProgramPath();
+            GetCDROMType(dir, sl);
 
-            GetCDROMType(dir[0], sl);
-
-            for (TCHAR drive = 'C'; sl.IsEmpty() && drive <= 'Z'; drive++) {
-                GetCDROMType(drive, sl);
+            // iterate over local drives
+            LPTSTR szPath = dir.GetBufferSetLength(3);
+            szPath[1] = _T(':');
+            szPath[2] = _T('\\');
+            for (TCHAR drive = _T('A'); sl.IsEmpty() && drive <= _T('Z'); ++drive) {
+                szPath[0] = drive;
+                GetCDROMType(dir, sl);
             }
         }
 
@@ -4409,10 +4420,15 @@ void CMainFrame::OnFileOpenCD(UINT nID)
 {
     nID -= ID_FILE_OPEN_CD_START;
 
-    nID++;
-    for (TCHAR drive = 'C'; drive <= 'Z'; drive++) {
-        CAtlList<CString> sl;
+    // iterate over local drives
+    CString dir;
+    LPTSTR szPath = dir.GetBufferSetLength(3);
+    szPath[1] = _T(':');
+    szPath[2] = _T('\\');
+    for (TCHAR drive = _T('A'); drive <= _T('Z'); ++drive) {
+        szPath[0] = drive;
 
+        CAtlList<CString> sl;
         switch (GetCDROMType(drive, sl)) {
             case CDROM_Audio:
             case CDROM_VideoCD:
@@ -11691,31 +11707,32 @@ bool CMainFrame::OpenMediaPrivate(CAutoPtr<OpenMediaData> pOMD)
     // Debug trace code - End
 #endif
 
-    CString mi_fn = _T("");
+    CString mi_fn;
 
     if (pFileData) {
         if (pFileData->fns.IsEmpty()) {
             return false;
         }
 
-        CString fn = pFileData->fns.GetHead();
+        mi_fn = pFileData->fns.GetHead();
 
-        int i = fn.Find(_T(":\\"));
+        // try to gently query removable drive types, this method only works on local drives, external access through UNC paths can just fail later on
+        int i = mi_fn.Find(_T(":\\"));
         if (i > 0) {
-            CString drive = fn.Left(i + 2);
+            CString drive = mi_fn.Left(i + 2);// copy the drive name, truncate right after the _T('\\')
             UINT type = GetDriveType(drive);
             CAtlList<CString> sl;
-            if (type == DRIVE_REMOVABLE || type == DRIVE_CDROM && GetCDROMType(drive[0], sl) != CDROM_Audio) {
+            if (type == DRIVE_REMOVABLE || type == DRIVE_CDROM && GetCDROMType(drive, sl) != CDROM_Audio) {
                 int ret = IDRETRY;
                 while (ret == IDRETRY) {
                     WIN32_FIND_DATA findFileData;
-                    HANDLE h = FindFirstFile(fn, &findFileData);
+                    HANDLE h = FindFirstFile(mi_fn, &findFileData);
                     if (h != INVALID_HANDLE_VALUE) {
                         FindClose(h);
                         ret = IDOK;
                     } else {
                         CString msg;
-                        msg.Format(IDS_MAINFRM_114, fn);
+                        msg.Format(IDS_MAINFRM_114, mi_fn);
                         ret = AfxMessageBox(msg, MB_RETRYCANCEL);
                     }
                 }
@@ -11724,7 +11741,6 @@ bool CMainFrame::OpenMediaPrivate(CAutoPtr<OpenMediaData> pOMD)
                     return false;
                 }
             }
-            mi_fn = fn;
         }
     }
 
@@ -12289,24 +12305,22 @@ void CMainFrame::SendNowPlayingToSkype()
             m_wndPlaylistBar.GetCur(pli);
 
             if (!pli.m_fns.IsEmpty()) {
-                CString label = !pli.m_label.IsEmpty() ? pli.m_label : pli.m_fns.GetHead();
+                CPath label(!pli.m_label.IsEmpty() ? pli.m_label : pli.m_fns.GetHead());
 
                 if (GetPlaybackMode() == PM_FILE) {
-                    CString fn = label;
-                    if (fn.Find(_T("://")) >= 0) {
-                        int i = fn.Find('?');
+                    if (label.m_strPath.Find(_T("://")) >= 0) {
+                        int i = label.m_strPath.Find('?');
                         if (i >= 0) {
-                            fn = fn.Left(i);
+                            label.m_strPath.Truncate(i);
                         }
                     }
-                    CPath path(fn);
-                    path.StripPath();
-                    path.MakePretty();
-                    path.RemoveExtension();
-                    title = (LPCTSTR)path;
+                    label.StripPath();
+                    label.MakePretty();
+                    label.RemoveExtension();
+                    title = label.m_strPath;
                     author.Empty();
                 } else if (GetPlaybackMode() == PM_CAPTURE) {
-                    title = label != pli.m_fns.GetHead() ? label : ResStr(IDS_CAPTURE_LIVE);
+                    title = label.m_strPath != pli.m_fns.GetHead() ? label.m_strPath : ResStr(IDS_CAPTURE_LIVE);
                     author.Empty();
                 } else if (GetPlaybackMode() == PM_DVD) {
                     title = _T("DVD");
@@ -12348,11 +12362,17 @@ void CMainFrame::SetupOpenCDSubMenu()
 
     UINT id = ID_FILE_OPEN_CD_START;
 
-    for (TCHAR drive = 'C'; drive <= 'Z'; drive++) {
-        CString label = GetDriveLabel(drive), str;
+    // iterate over local drives
+    CString dir;
+    LPTSTR szPath = dir.GetBufferSetLength(3);
+    szPath[1] = _T(':');
+    szPath[2] = _T('\\');
+    for (TCHAR drive = _T('A'); drive <= _T('Z'); ++drive) {
+        szPath[0] = drive;
+        CString label = GetDriveLabel(dir), str;
 
         CAtlList<CString> files;
-        switch (GetCDROMType(drive, files)) {
+        switch (GetCDROMType(dir, files)) {
             case CDROM_Audio:
                 if (label.IsEmpty()) {
                     label = _T("Audio CD");

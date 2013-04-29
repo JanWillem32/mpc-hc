@@ -41,22 +41,26 @@ CWebServer::CWebServer(CMainFrame* pMainFrame, int nPort)
     : m_pMainFrame(pMainFrame)
     , m_nPort(nPort)
 {
-    m_webroot = CPath(GetProgramPath());
     const CAppSettings& s = AfxGetAppSettings();
 
     CString WebRoot = s.strWebRoot;
     WebRoot.Replace('/', '\\');
     WebRoot.Trim();
-    CPath p(WebRoot);
-    if (WebRoot.Find(_T(":\\")) < 0 && WebRoot.Find(_T("\\\\")) < 0) {
-        m_webroot.Append(WebRoot);
+    if (WebRoot.Find(_T(":\\")) > 0 || (WebRoot[0] == _T('\\') && WebRoot[1] == _T('\\'))) {// note: names prefixed with two backslashes can be larger than MAX_PATH
+        m_webroot.m_strPath = WebRoot;
     } else {
-        m_webroot = p;
+       m_webroot.m_strPath = GetProgramPath() + WebRoot;
     }
-    m_webroot.Canonicalize();
-    m_webroot.MakePretty();
-    if (!m_webroot.IsDirectory()) {
-        m_webroot = CPath();
+
+    if (m_webroot.m_strPath.GetLength() <= MAX_PATH) {
+        // only PathAllocCanonicalize() can properly canonicalize names over the MAX_PATH length, and it's only available on Windows 8 and newer
+        // this issue can only be solved by writing our own canonicalization routine
+        m_webroot.Canonicalize();
+    }
+    DWORD dwFolderAttributes = GetFileAttributes(m_webroot.m_strPath);
+    if (!(dwFolderAttributes & FILE_ATTRIBUTE_DIRECTORY) || (dwFolderAttributes == INVALID_FILE_ATTRIBUTES)) {
+        ASSERT(0);
+        m_webroot.m_strPath.Empty();
     }
 
     CAtlList<CString> sl;
